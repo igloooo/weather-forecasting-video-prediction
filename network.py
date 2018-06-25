@@ -1,7 +1,6 @@
 from ST_LSTM import *
 import sys
 
-
 class Encoder(nn.Module):
     """
     n_layers is number of layers
@@ -20,6 +19,7 @@ class Encoder(nn.Module):
         self.kernel_HW_output = kernel_HW_output if kernel_HW_output is not None else kernel_HWs[-1]
         self.encoder_only = encoder_only
 
+
         self.cells = nn.ModuleList([])
         for i in range(self.n_layers):
             if i==0:
@@ -35,8 +35,8 @@ class Encoder(nn.Module):
                                                 (self.input_size[2]-self.hidden_sizes[-1][2]+self.kernel_HW_m[1]-1)/2))
         if encoder_only:
             self.output_conv = nn.Conv2d(self.hidden_sizes[-1][0], self.input_size[0], self.kernel_HW_output,
-                                         padding=((self.input_size[1]-self.hidden_sizes[-1][1]+self.kernel_HWs[-1][0]-1)/2,
-                                                  (self.input_size[2]-self.hidden_sizes[-1][2]+self.kernel_HWs[-1][1]-1)/2))
+                                    padding=((self.input_size[1]-self.hidden_sizes[-1][1]+self.kernel_HWs[-1][0]-1)/2,
+                                             (self.input_size[2]-self.hidden_sizes[-1][2]+self.kernel_HWs[-1][1]-1)/2))
 
         self._reset_parameters()
 
@@ -45,12 +45,15 @@ class Encoder(nn.Module):
             if len(param.size()) == 1:
                 if name.find("f.") >= 0:
                     nn.init.constant_(param, 1)
+                elif name.find("f_.") >= 0:
+                    nn.init.constant_(param, 1)
                 else:
                     nn.init.constant_(param, 0)
             elif len(param.size()) == 4:
-                ran = 1.0/(param.size()[1]*param.size()[2]*param.size()[3])**0.33
-                nn.init.uniform(param, -ran, ran)
+                ran = 0.09/(param.size()[1]* param.size()[2]*param.size()[3])**0.3
+                nn.init.uniform_(param, -ran, ran)
             else:
+                print(len(param.size()))
                 raise Exception('unexpected case')
 
     def forward(self, input_,  states=None):

@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import torch
 from data_generator import *
 import time
+import train
 '''
 arr = np.load("mnist_test_seq.npy")
 print(len(arr[0,:,0,0]))
@@ -46,6 +47,7 @@ for i in range(10):
     im.reshape(1,28,28)
     np.save('mnist/raw digit/'+str(i)+'.npy', im)
 '''
+'''
 generator = BouncingMNISTDataHandler(8, 2)
 data = generator.GetBatch()
 plt.figure(figsize=(20,8))
@@ -54,3 +56,4 @@ for i in range(8):
         plt.subplot(8, 20, 20*i+j+1)
         plt.imshow(data[j,i,0,:,:])
 plt.show()
+'''

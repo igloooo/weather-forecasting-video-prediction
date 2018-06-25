@@ -43,6 +43,7 @@ class SpatioTemporal_LSTM(nn.Module):
         self.conv_ch = create_conv(self, 'hh')
         self.conv_mh = create_conv(self, 'hh')
 
+
     def _compute_cell(self, x, h, c, m):
         # all parameters below is of (batch_size, oC, oH, oW)
         g = F.tanh(self.conv_xg(x) + self.conv_hg(h) + self.conv_cg(c))
@@ -82,7 +83,6 @@ class HighwayUnit(nn.Module):
         self.conv_zp = create_conv(self, 'hh')
         self.conv_hu = create_conv(self, 'ih')
         self.conv_zu = create_conv(self, 'hh')
-
 
 
     def forward(self, input_, z=None):

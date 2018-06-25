@@ -17,12 +17,12 @@ def showPlot(*curves):
     plt.figure()
     fig, ax = plt.subplots()
     # this locator puts ticks at regular intervals
-    loc = ticker.MultipleLocator(base=0.2)
+    loc = ticker.MultipleLocator(base=20)
     ax.yaxis.set_major_locator(loc)
     for curve in curves:
         plt.plot(curve)
     plt.savefig('loss curve.png')
-
+    plt.close()
 
 def asMinutes(s):
     m = math.floor(s / 60)
@@ -119,8 +119,8 @@ def activation_statistics(states):
     n_layers = len(h)
     for s, s_avg in zip((h, c, m), (h_avg, c_avg, m_avg)):
         for i in range(n_layers):
-            s_avg.append(round(torch.sum(s[i]).item()/reduce(lambda x, y: x*y, list(s[i].size()))), 4)
-    z_avg = round(torch.sum(z).item()/reduce(lambda x, y: x*y, list(z.size()), 4))
+            s_avg.append(round(torch.sum(s[i]).item()/reduce(lambda x, y: x*y, list(s[i].size())),4))
+    z_avg = round(torch.sum(z).item()/reduce(lambda x, y: x*y, list(z.size())),4)
     return h_avg, c_avg, m_avg, z_avg
 
 
@@ -131,22 +131,24 @@ def grad_statistics(model):
         if param.grad is not None:
             total_grad_value += torch.sum(torch.abs(param.grad)).item()
             num_variables += reduce(lambda x, y: x*y, list(param.grad.size()))
-
+            
     return total_grad_value / num_variables
 
 
-def train(input_variable, target_variable, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, hidden_sizes, device, thresh=10, teacher_forcing_ratio=0.5):
+def train(input_variable, target_variable, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, hidden_sizes, device, thresh=100,  teacher_forcing_ratio=0.5):
     encoder_optimizer.zero_grad()
     if decoder is not None:
         decoder_optimizer.zero_grad()
 
     input_length = input_variable.size()[0]
     target_length = target_variable.size()[0]
+    batch_size = target_variable.size()[1]    
 
     encoder_hidden = initial_hiddens(input_variable.size()[1], hidden_sizes, device)
 
     for ei in range(input_length):
-        encoder_output, encoder_hidden = encoder(input_variable[ei], encoder_hidden)
+        downsampled_input = F.max_pool2d(input_variable[ei], 2)
+        encoder_output, encoder_hidden = encoder(downsampled_input, encoder_hidden)
 
         logging.debug("input step{}".format(ei))
         logging.debug("h {}\n c {}\n m {}\n z {}".format(*activation_statistics(encoder_hidden)))
@@ -155,21 +157,22 @@ def train(input_variable, target_variable, encoder, decoder, encoder_optimizer, 
     loss = 0.0
     if decoder is None:
         for di in range(target_length):
-            loss += criterion(encoder_output, target_variable[di])
+            downsampled_target = F.max_pool2d(target_variable[di], 2)
+            loss += criterion(encoder_output, downsampled_target)
             if use_teacher_forcing:
-                encoder_input = target_variable[di]
+                encoder_input = downsampled_target
             else:
                 encoder_input = encoder_output
             encoder_output, encoder_hidden = encoder(encoder_input, encoder_hidden)
 
             logging.debug("output step{}".format(di))
             logging.debug("h {}\n c {}\n m {}\n z {}".format(*activation_statistics(encoder_hidden)))
-
+        
+        loss = loss / (target_length*batch_size)
         loss.backward()
         nn.utils.clip_grad_norm_(encoder.parameters(), thresh)
-
-        logging.debug("encoder grad statistics {}".format(grad_statistics(encoder)))
-
+        logging.info("encoder grad statistics {}".format(grad_statistics(encoder)))
+ 
         encoder_optimizer.step()
     else:
         decoder_input = torch.zeros_like(input_variable[0])
@@ -197,23 +200,24 @@ def train(input_variable, target_variable, encoder, decoder, encoder_optimizer, 
                 logging.debug("output step{}".format(di))
                 logging.debug("h {}\n c {}\n m {}\n z {}".format(*activation_statistics(decoder_hidden)))
 
+        loss = loss / (target_length*batch_size)
         loss.backward()
         nn.utils.clip_grad_norm_(encoder.parameters(), thresh)
         nn.utils.clip_grad_norm_(decoder.parameters(), thresh)
         encoder_optimizer.step()
-        decoder_optimizer.step()
+        decoder_optimizer.step()        
 
-        logging.debug("encoder grad statistics {}".format(grad_statistics(encoder)))
-        logging.debug("decoder grad statistics {}".format(grad_statistics(decoder)))
-
+        logging.info("encoder grad statistics {}".format(grad_statistics(encoder)))
+        logging.info("decoder grad statistics {}".format(grad_statistics(decoder)))
+        
     return loss.item()
 
 
-def trainIters(encoder, decoder, train_criterion, train_data_generator, hidden_sizes, n_iters, device=None, print_every=20, plot_every=100, learning_rate=0.01):
+def trainIters(encoder, decoder, train_criterion, train_data_generator, hidden_sizes, n_iters, para_dir, device=None, print_every=10, plot_every=20, save_every=100, thresh=100, learning_rate=0.001, teacher_forcing_ratio=0.5):
     start_time = time.time()
-    encoder_optimizer = torch.optim.SGD(encoder.parameters(), lr=learning_rate)
+    encoder_optimizer = torch.optim.Adam(encoder.parameters(), lr=learning_rate, amsgrad=True)
     if decoder is not None:
-        decoder_optimizer = torch.optim.SGD(decoder.parameters(), lr=learning_rate)
+        decoder_optimizer = torch.optim.Adam(decoder.parameters(), lr=learning_rate, amsgrad=True)
     else:
         decoder_optimizer = None
 
@@ -227,10 +231,10 @@ def trainIters(encoder, decoder, train_criterion, train_data_generator, hidden_s
         target_variable = train_pair[1]
         if device is not None:
             input_variable = input_variable.to(device)
-            target_variable = input_variable.to(device)
+            target_variable = target_variable.to(device) 
 
         loss = train(input_variable, target_variable, encoder,
-                     decoder, encoder_optimizer, decoder_optimizer, train_criterion, hidden_sizes, device)
+                     decoder, encoder_optimizer, decoder_optimizer, train_criterion, hidden_sizes, device, thresh=thresh, teacher_forcing_ratio=teacher_forcing_ratio)
 
         print_loss_total += loss
         plot_loss_total += loss
@@ -245,8 +249,10 @@ def trainIters(encoder, decoder, train_criterion, train_data_generator, hidden_s
             plot_loss_avg = plot_loss_total / plot_every
             plot_losses.append(plot_loss_avg)
             plot_loss_total = 0.0
-
-    showPlot(plot_losses)
+        
+        if it % save_every == 0:
+            torch.save(encoder.state_dict(), para_dir)
+            showPlot(plot_losses)
 
 
 def evaluate(encoder, decoder, criterion, eval_data_generator, hidden_sizes, device):
@@ -264,16 +270,17 @@ def evaluate(encoder, decoder, criterion, eval_data_generator, hidden_sizes, dev
         target_variable = target_variable.to(device)
 
     for ei in range(input_length):
-        encoder_output, encoder_hidden = encoder(input_variable[ei],
+        downsampled_input = F.max_pool2d(input_variable[ei], 2)
+        encoder_output, encoder_hidden = encoder(downsampled_input,
                                                  encoder_hidden)
 
     loss = 0.0
     if decoder is None:
         for di in range(target_length):
-            loss += criterion(encoder_output, target_variable[di])
+            downsampled_target = F.max_pool2d(target_variable[di], 2)
+            loss += criterion(encoder_output, downsampled_target)
             encoder_output, encoder_hidden = encoder(encoder_output, encoder_hidden)
-        print('backward called')
-        loss.backward()
+     
     else:
         decoder_input = torch.zeros_like(input_variable[0])
 
@@ -288,40 +295,51 @@ def evaluate(encoder, decoder, criterion, eval_data_generator, hidden_sizes, dev
 
             loss += criterion(decoder_output, target_variable)
 
-    return loss.item() / batch_size
+    return loss.item() / (batch_size*target_length)
 
 
-def show_generation(encoder, input_variable, hidden_sizes, device):
-    plt.figure(figsize=(20, 1))
+def show_generation(encoder, input_variable, target_variable, hidden_sizes, device):
+    plt.figure(figsize=(10,3))
     encoder_hidden = initial_hiddens(1, hidden_sizes, device)
     if device is not None:
         input_variable = input_variable.to(device)
+        target_variable = target_variable.to(device)
 
     for ei in range(10):
-        plt.subplot(1, 20, 1 + ei)
-        plt.imshow(input_variable[ei, 0, 0].detach())
-        encoder_output, encoder_hidden = encoder(input_variable[ei], encoder_hidden)
+    # show input    
+        plt.subplot(3, 10, 1 + ei)
+        downsampled_input = F.max_pool2d(input_variable[ei], 2)
+        plt.imshow(downsampled_input[0,0].detach())
+        encoder_output, encoder_hidden = encoder(downsampled_input, encoder_hidden)
     for di in range(10):
-        plt.subplot(1, 20, 11 + di)
+    # show ground truth
+        plt.subplot(3, 10, 11 + di)
+        downsampled_target = F.max_pool2d(target_variable[di], 2)
+        plt.imshow(downsampled_target[0,0].detach())
+    
+    print(encoder_output[0,0])   
+    for di in range(10):
+    # show output
+        plt.subplot(3, 10, 21 + di)
         plt.imshow(encoder_output[0, 0].detach())
         encoder_output, encoder_hidden = encoder(encoder_output, encoder_hidden)
     plt.savefig("generated_images.png")
 
 
 def main():
-    para_dir = "./parameters/model.pkl"
-
+    para_dir = './parameters/model.pkl'
+    
     train_batch_size = 8
-    eval_batch_size = 16
+    eval_batch_size = 8
     train_generator = BouncingMNISTDataHandler(train_batch_size, 2)
     eval_generator = BouncingMNISTDataHandler(eval_batch_size, 3)
 
-    input_size = (1, 64, 64)
-    hidden_sizes = [(128, 64, 64), (32, 64, 64), (32, 64, 64), (32, 64, 64)]
+    input_size = (1, 32, 32)
+    hidden_sizes = [(128, 32, 32), (64, 32, 32), (64, 32, 32), (64, 32, 32)]
     kernel_HWs = [(5, 5)]*4
 
     encoder = Encoder(input_size, hidden_sizes, kernel_HWs)
-    encoder = torch.nn.DataParallel(encoder)
+    #encoder = torch.nn.DataParallel(encoder)
     try:
         encoder.load_state_dict(torch.load(para_dir))
     except FileNotFoundError:
@@ -329,19 +347,19 @@ def main():
 
     device = None
     if torch.cuda.device_count() > 1:
-        device = torch.device("cuda:0")
-        encoder.to(device)
+        device = torch.device("cuda:1")
+        encoder = encoder.to(device)
 
-    L1_loss = nn.L1Loss()
-    L2_loss = nn.MSELoss()
-    L2_loss_ = nn.MSELoss()
+    L1_loss = nn.L1Loss(size_average=False)
+    L2_loss = nn.MSELoss(size_average=False)
+    L2_loss_ = nn.MSELoss(size_average=False)
     train_criterion = lambda inputs, targets: L1_loss(inputs, targets) + L2_loss(inputs, targets)
-    trainIters(encoder, None, train_criterion, train_generator, hidden_sizes, 2000, device)
-    torch.save(encoder.state_dict(), para_dir)
-    print('eval loss', evaluate(encoder, None, L2_loss_, eval_generator, hidden_sizes, device))
+    trainIters(encoder, None, train_criterion, train_generator, hidden_sizes, 1600, para_dir, device, thresh=100000, learning_rate=0.0001, teacher_forcing_ratio=0.9)
+    #print('eval loss', evaluate(encoder, None, L2_loss_, eval_generator, hidden_sizes, device))
 
-    # input_var = BouncingMNISTDataHandler(1, 2).GetBatch()[0]
-    # show_generation(encoder, input_var, hidden_sizes, device)
+    #input_var, target_var = BouncingMNISTDataHandler(1, 2).GetBatch()
+    #show_generation(encoder, input_var, target_var, hidden_sizes, device)
 
 if __name__ == '__main__':
     main()
+
